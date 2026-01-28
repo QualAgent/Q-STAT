@@ -1,0 +1,29 @@
+[project]
+name = "Q-STAT-agent"
+version = "0.1.0"
+description = "품질 에이전트"
+requires-python = ">=3.12"
+
+dependencies = [
+    # --- AI Core ---
+    "langchain>=0.3.0",
+    "langchain-openai>=0.2.0",
+    "langgraph>=0.2.50",
+    "openai>=1.50.0",
+    
+    # --- Web UI ---
+    "streamlit>=1.40.0",
+    
+    # --- Data Science ---
+    "pandas>=2.2.0",
+    "numpy>=1.26.0",
+    "scipy>=1.14.0",
+    "matplotlib>=3.9.0",  
+    
+    # --- Database & Utils ---
+    "psycopg2-binary>=2.9.9",
+    "python-dotenv>=1.0.0",
+    "sqlalchemy>=2.0.30",
+]
+
+[tool.uv]

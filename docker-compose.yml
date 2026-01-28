@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15
+    container_name: agent_db
+    environment:
+      POSTGRES_DB: agent_db
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: mypassword
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+      - ./data/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - agent_net
+
+  app:
+    build: .
+    container_name: agent_app
+    volumes:
+      - ./src:/app/src   # 코드 수정 시 즉시 반영 (Hot Reload)
+      - ./.env:/app/.env
+    ports:
+      - "8501:8501"
+    depends_on:
+      - db
+    env_file:
+      - .env
+    networks:
+      - agent_net
+
+networks:
+  agent_net:
+    driver: bridge

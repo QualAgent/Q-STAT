@@ -14,7 +14,7 @@ try:
     lg_version = importlib.metadata.version("langgraph")
     st.success(f"LangGraph Installed! (v{lg_version})")
 except Exception as e:
-    st.warning(f"⚠️ LangGraph is installed, but version check failed: {e}")
+    st.warning(f"LangGraph is installed, but version check failed: {e}")
 st.subheader("2. Security (.env)")
 if os.getenv("OPENAI_API_KEY"):
     st.success("OpenAI API Key Loaded")

@@ -20,7 +20,7 @@ services:
     build: .
     container_name: agent_app
     volumes:
-      - ./src:/app/src   # 코드 수정 시 즉시 반영 (Hot Reload)
+      - ./src:/app/src
       - ./.env:/app/.env
     ports:
       - "8501:8501"

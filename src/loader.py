@@ -1,52 +1,70 @@
 import pandas as pd
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 import os
+from dotenv import load_dotenv
 
-# 1. DB 접속 (환경변수 사용)
-db_user = os.getenv("POSTGRES_USER")
-db_password = os.getenv("POSTGRES_PASSWORD")
-db_host = os.getenv("POSTGRES_HOST")
-db_name = os.getenv("POSTGRES_DB")
-db_url = f"postgresql://{db_user}:{db_password}@{db_host}:5432/{db_name}"
+# 1. 환경 변수 로드 (.env 파일에서 DB 정보 가져오기)
+load_dotenv()
+
+USER = os.getenv("POSTGRES_USER", "myuser")
+PASSWORD = os.getenv("POSTGRES_PASSWORD", "mypassword")
+HOST = os.getenv("POSTGRES_HOST", "localhost")
+PORT = os.getenv("POSTGRES_PORT", "5432")
+DB_NAME = os.getenv("POSTGRES_DB", "agent_db")
+
+# 2. DB 연결 엔진 생성
+db_url = f"postgresql://{USER}:{PASSWORD}@{HOST}:{PORT}/{DB_NAME}?sslmode=require"
+
 engine = create_engine(db_url)
 
-def upload_normalized_data():
-    print("[Start] 정규화 데이터 적재 시작")
-
-    upload_list = [
-
-        ("products.xlsx", "products", "product_id"), 
-        ("equipment.xlsx", "equipment", "eq_id"),
-        
-        # 2. 자식 테이블 (로그, 이력 등)
-        # 자식은 부모가 들어간 뒤에 넣어야 안전함
-        ("defect_logs.xlsx", "defect_logs", None), 
-    ]
-
+def load_data_to_db(excel_file_path):
+    print(f"엑셀 파일 로딩 중: {excel_file_path}")
+    
     try:
-        with engine.connect() as conn:
-            for file_name, table_name, pk_col in upload_list:
-                print(f"\n 처리 중: {file_name} -> 테이블: {table_name}")
+        # 엑셀 파일 전체 읽기
+        xls = pd.ExcelFile(excel_file_path)
+        
+        if 'MI' in xls.sheet_names:
+            df_mi = pd.read_excel(xls, 'MI')
+            # DB 적재 (replace: 기존 거 지우고 새로 씀 / append: 뒤에 추가)
+            df_mi.to_sql('MI', engine, if_exists='replace', index=False)
+            print(f"MI 적재 완료 ({len(df_mi)}건)")
+        else:
+            print("'MI' 시트가 없습니다.")
+
+        if 'FDC' in xls.sheet_names:
+            df_fdc = pd.read_excel(xls, 'FDC')
+            df_fdc.to_sql('FDC', engine, if_exists='replace', index=False)
+            print(f"FDC 적재 완료 ({len(df_fdc)}건)")
+        else:
+            print("'FDC' 시트가 없습니다.")
+
+        if 'PM' in xls.sheet_names:
+            df_pm = pd.read_excel(xls, 'PM')
+            # 날짜 컬럼은 datetime 형식으로 변환해주는 게 안전함
+            if 'date' in df_pm.columns:
+                df_pm['date'] = pd.to_datetime(df_pm['date'])
                 
-                # 1. 파일 읽기
-                file_path = f"/app/src/{file_name}"
-                df = pd.read_excel(file_path) # csv면 read_csv로 변경
-                
-                # 2. 데이터 넣기 (일단 덮어쓰기)
-                print(f"데이터 {len(df)}건 업로드 중...")
-                df.to_sql(name=table_name, con=engine, if_exists='replace', index=False)
-                
-                # 3. [고급] Primary Key(기본키) 설정해주기
-                # Pandas to_sql은 기본키 설정을 안 해줍니다. 그래서 SQL로 직접 지정해줘야 진짜 RDB답게 씁니다.
-                if pk_col:
-                    print(f"Primary Key 설정 ({pk_col})...")
-                    conn.execute(text(f"ALTER TABLE {table_name} ADD PRIMARY KEY ({pk_col});"))
-                    conn.commit()
-                    
-        print("\n [Success] 모든 정규화 데이터 적재 완료!")
+            df_pm.to_sql('PM', engine, if_exists='replace', index=False)
+            print(f"PM 적재 완료 ({len(df_pm)}건)")
+        else:
+            print("'PM' 시트가 없습니다.")
+
+        if 'BOM' in xls.sheet_names:
+            df_bom = pd.read_excel(xls, 'BOM')
+            df_bom.to_sql('BOM', engine, if_exists='replace', index=False)
+            print(f"BOM 적재 완료 ({len(df_bom)}건)")
+        else:
+            print("'BOM' 시트가 없습니다.")
+            
+        print("\n 모든 데이터 적재가 완료되었습니다!")
 
     except Exception as e:
-        print(f"\n [Error] 문제가 발생했습니다: {e}")
+        print(f"데이터 적재 중 오류 발생: {e}")
 
 if __name__ == "__main__":
-    upload_normalized_data()
+    file_path = "data/dummy_data/etch_process_data.xlsx" 
+    if os.path.exists(file_path):
+        load_data_to_db(file_path)
+    else:
+        print("파일 확인 필요")

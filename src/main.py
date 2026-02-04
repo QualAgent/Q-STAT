@@ -31,7 +31,8 @@ try:
         host= db_host,
         database=db_name,
         user=db_user,
-        password=db_password
+        password=db_password,
+        sslmode='require'
     )
     st.success("PostgreSQL Connected.")
     

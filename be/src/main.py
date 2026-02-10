@@ -75,7 +75,7 @@ def check_db():
 def check_chromadb():
     """ChromaDB 연결 점검"""
     try:
-        url = "http://chromadb:8000/api/v1/heartbeat"
+        url = "http://chromadb:8000/api/v2/heartbeat"
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=3) as res:
             data = json.loads(res.read())

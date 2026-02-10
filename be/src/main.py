@@ -3,7 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 import psycopg2
 import importlib.metadata
+import urllib.request
+import json
 from dotenv import load_dotenv
+
+from src.routers.workflow import router as workflow_router
 
 load_dotenv()
 
@@ -65,3 +69,46 @@ def check_db():
         return {"status": "ok", "version": version}
     except Exception as e:
         return {"status": "error", "detail": str(e)}
+
+
+@app.get("/check/chromadb")
+def check_chromadb():
+    """ChromaDB 연결 점검"""
+    try:
+        url = "http://chromadb:8000/api/v1/heartbeat"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=3) as res:
+            data = json.loads(res.read())
+        return {"status": "ok", "heartbeat": data}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+
+
+@app.get("/check/llm")
+def check_llm():
+    """LLM 연결 점검 (Ollama 또는 OpenAI)"""
+    provider = os.getenv("LLM_PROVIDER", "ollama")
+    try:
+        if provider == "ollama":
+            base_url = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
+            model = os.getenv("OLLAMA_MODEL", "qwen3:8b")
+            url = f"{base_url}/api/tags"
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=5) as res:
+                data = json.loads(res.read())
+            model_names = [m["name"] for m in data.get("models", [])]
+            if any(model in name for name in model_names):
+                return {"status": "ok", "provider": "ollama", "model": model}
+            else:
+                return {"status": "error", "provider": "ollama", "detail": f"'{model}' 모델 없음. 설치된 모델: {model_names}"}
+        else:
+            api_key = os.getenv("OPENAI_API_KEY", "")
+            if not api_key or api_key == "a123456789":
+                return {"status": "error", "provider": "openai", "detail": "유효한 API Key 없음"}
+            return {"status": "ok", "provider": "openai", "model": os.getenv("OPENAI_MODEL_ID", "gpt-4o")}
+    except Exception as e:
+        return {"status": "error", "provider": provider, "detail": str(e)}
+
+
+# --- 라우터 등록 ---
+app.include_router(workflow_router)

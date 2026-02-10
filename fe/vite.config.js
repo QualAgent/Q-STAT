@@ -9,7 +9,7 @@ export default defineConfig({
     proxy: {
       // /api 로 시작하는 요청은 백엔드 컨테이너로 프록시
       '/api': {
-        target: 'http://backend:8000',
+        target: 'http://be:8000',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
       },

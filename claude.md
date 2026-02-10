@@ -16,18 +16,18 @@
 
 ### Essential Commands
 - **Start All**: `docker compose up --build`
-- **Backend Only**: `docker compose up backend`
-- **Frontend Only**: `docker compose up frontend`
-- **Load Data**: `docker compose exec backend python -m src.loader` (엑셀 -> DB 적재)
-- **Test**: `docker compose exec backend pytest tests/`
+- **Backend Only**: `docker compose up be`
+- **Frontend Only**: `docker compose up fe`
+- **Load Data**: `docker compose exec be python -m src.loader` (엑셀 -> DB 적재)
+- **Test**: `docker compose exec be pytest tests/`
 
 ### Directory Structure
-- `backend/src/main.py`: FastAPI 앱 진입점
-- `backend/src/agents/`: 에이전트 로직 (Orchestrator, Data Monitor, Stat Analyzer, Docs Researcher, Strategy Advisor)
-- `backend/src/routers/`: FastAPI 라우터 (API 엔드포인트)
-- `backend/src/tools/`: 에이전트가 사용하는 도구 (SQL Loader, Statistics Calc)
-- `backend/src/state.py`: **[중요]** 에이전트 간 공유되는 유일한 메모리 구조 (`AgentState`)
-- `frontend/src/`: Vue.js 컴포넌트 및 페이지
+- `be/src/main.py`: FastAPI 앱 진입점
+- `be/src/agents/`: 에이전트 로직 (Orchestrator, Data Monitor, Stat Analyzer, Docs Researcher, Strategy Advisor)
+- `be/src/routers/`: FastAPI 라우터 (API 엔드포인트)
+- `be/src/tools/`: 에이전트가 사용하는 도구 (SQL Loader, Statistics Calc)
+- `be/src/state.py`: **[중요]** 에이전트 간 공유되는 유일한 메모리 구조 (`AgentState`)
+- `fe/src/`: Vue.js 컴포넌트 및 페이지
 
 
 ## 3. Coding Standards (for AI)

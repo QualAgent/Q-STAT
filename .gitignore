@@ -1,6 +1,7 @@
 .env
 __pycache__/
 postgres_data/
+chroma_data/
 .DS_Store
 
 # Frontend

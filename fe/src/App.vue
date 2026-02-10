@@ -33,6 +33,20 @@
       <p v-else style="color: red">{{ db.detail || 'DB Connection Failed' }}</p>
       <code v-if="db.version">{{ db.version }}</code>
     </section>
+
+    <section>
+      <h2>4. ChromaDB (Vector DB)</h2>
+      <p v-if="chromadb.status === 'ok'" style="color: green">ChromaDB Connected</p>
+      <p v-else style="color: red">{{ chromadb.detail || 'ChromaDB Connection Failed' }}</p>
+    </section>
+
+    <section>
+      <h2>5. LLM Connection</h2>
+      <p v-if="llm.status === 'ok'" style="color: green">
+        {{ llm.provider }} / {{ llm.model }} Connected
+      </p>
+      <p v-else style="color: red">{{ llm.detail || 'LLM Connection Failed' }}</p>
+    </section>
   </div>
 </template>
 
@@ -42,6 +56,8 @@ import { ref, onMounted } from 'vue'
 const health = ref({})
 const env = ref({})
 const db = ref({})
+const chromadb = ref({})
+const llm = ref({})
 
 async function fetchJson(url) {
   try {
@@ -56,5 +72,7 @@ onMounted(async () => {
   health.value = await fetchJson('/api/health')
   env.value = await fetchJson('/api/check/env')
   db.value = await fetchJson('/api/check/db')
+  chromadb.value = await fetchJson('/api/check/chromadb')
+  llm.value = await fetchJson('/api/check/llm')
 })
 </script>

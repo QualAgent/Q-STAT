@@ -1,9 +1,9 @@
 services:
-  backend:
-    build: ./backend
+  be:
+    build: ./be
     container_name: qstat_backend
     volumes:
-      - ./backend/src:/app/src
+      - ./be/src:/app/src
       - ./.env:/app/.env
       - ./data:/app/data
     ports:
@@ -11,13 +11,21 @@ services:
     env_file:
       - .env
 
-  frontend:
-    build: ./frontend
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: qstat_chromadb
+    ports:
+      - "8100:8000"
+    volumes:
+      - ./chroma_data:/chroma/chroma
+
+  fe:
+    build: ./fe
     container_name: qstat_frontend
     volumes:
-      - ./frontend/src:/app/src
-      - ./frontend/index.html:/app/index.html
+      - ./fe/src:/app/src
+      - ./fe/index.html:/app/index.html
     ports:
       - "5173:5173"
     depends_on:
-      - backend
+      - be

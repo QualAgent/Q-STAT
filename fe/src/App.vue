@@ -19,9 +19,9 @@
           <span v-else style="color: red">Not found</span>
         </li>
         <li>
-          OpenAI API Key:
-          <span :style="{ color: env.openai_api_key?.status === 'ok' ? 'green' : 'red' }">
-            {{ env.openai_api_key?.status === 'ok' ? 'Loaded' : 'Missing' }}
+          AWS Bedrock:
+          <span :style="{ color: env.aws_credentials?.status === 'ok' ? 'green' : 'red' }">
+            {{ env.aws_credentials?.status === 'ok' ? `Loaded (${env.aws_credentials.region})` : 'Missing' }}
           </span>
         </li>
       </ul>

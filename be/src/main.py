@@ -40,11 +40,13 @@ def check_env():
     except Exception as e:
         results["langgraph"] = {"status": "error", "detail": str(e)}
 
-    # OpenAI API Key 확인
-    if os.getenv("OPENAI_API_KEY"):
-        results["openai_api_key"] = {"status": "ok"}
+    # AWS Bedrock 자격증명 확인
+    aws_key = os.getenv("AWS_ACCESS_KEY_ID", "")
+    aws_secret = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+    if aws_key and aws_secret:
+        results["aws_credentials"] = {"status": "ok", "region": os.getenv("AWS_DEFAULT_REGION", "us-east-1")}
     else:
-        results["openai_api_key"] = {"status": "missing"}
+        results["aws_credentials"] = {"status": "missing", "detail": "AWS_ACCESS_KEY_ID 또는 AWS_SECRET_ACCESS_KEY 미설정"}
 
     return results
 
@@ -86,7 +88,7 @@ def check_chromadb():
 
 @app.get("/check/llm")
 def check_llm():
-    """LLM 연결 점검 (Ollama 또는 OpenAI)"""
+    """LLM 연결 점검"""
     provider = os.getenv("LLM_PROVIDER", "ollama")
     try:
         if provider == "ollama":
@@ -102,10 +104,35 @@ def check_llm():
             else:
                 return {"status": "error", "provider": "ollama", "detail": f"'{model}' 모델 없음. 설치된 모델: {model_names}"}
         else:
-            api_key = os.getenv("OPENAI_API_KEY", "")
-            if not api_key or api_key == "a123456789":
-                return {"status": "error", "provider": "openai", "detail": "유효한 API Key 없음"}
-            return {"status": "ok", "provider": "openai", "model": os.getenv("OPENAI_MODEL_ID", "gpt-4o")}
+            aws_key = os.getenv("AWS_ACCESS_KEY_ID", "")
+            aws_secret = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+            if not aws_key or not aws_secret:
+                return {"status": "error", "provider": "bedrock", "detail": "AWS 자격증명 미설정"}
+            return {
+                "status": "ok",
+                "provider": "bedrock",
+                "model": os.getenv("BEDROCK_MODEL_ID", "openai.gpt-oss-120b-1:0"),
+                "region": os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
+            }
+    except Exception as e:
+        return {"status": "error", "provider": provider, "detail": str(e)}
+
+
+@app.post("/test/llm")
+def test_llm(prompt: str = "안녕하세요, 간단히 자기소개 해주세요."):
+    """LLM에 프롬프트를 보내고 응답을 확인하는 테스트 엔드포인트"""
+    provider = os.getenv("LLM_PROVIDER", "ollama")
+    try:
+        from src.llm import get_llm
+        llm = get_llm()
+        response = llm.invoke(prompt)
+        return {
+            "status": "ok",
+            "provider": provider,
+            "model": os.getenv("BEDROCK_MODEL_ID") or os.getenv("OLLAMA_MODEL") or os.getenv("OPENAI_MODEL_ID"),
+            "prompt": prompt,
+            "response": response.content,
+        }
     except Exception as e:
         return {"status": "error", "provider": provider, "detail": str(e)}
 

@@ -1,270 +1,824 @@
-# Q-STAT 품질 에이전트
+# 제조 품질 관리 에이전트 아키텍처 설계
+
+## 1. 전체 시스템 개요
+
+**Metrology 데이터 기반 품질 이상 감지 → 통계 분석 → 원인 추정 → 리포트 생성 → 대화형 QA**
+
+까지의 워크플로우를 자동화하는 AI 에이전트 시스템
 
 ---
 
-## 1. 개요
+## 2. 아키텍처 구성도
 
-### 1.1. 제품 정의
-
-복잡하게 얽힌 4M(설비, 자재, 공법, 사람) 변수 중, 엔지니어의 직관(Human-in-the-loop)과 통계적 검증을 결합하여, 허위 상관관계를 걸러내고 실제 불량을 유발한 핵심 원인만을 정밀하게 포착하는 품질 분석 에이전트
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                          LangGraph Orchestrator                              │
+│                                                                              │
+│  ┌──────────┐   ┌──────────┐   ┌───────────────┐   ┌─────────────────────┐   │
+│  │ Monitor  │──▶│ Classify │──▶│  Statistics   │──▶│    Reporter       │   │
+│  │  Node    │   │  Node    │   │    Agent      │   │     Agent           │   │
+│  └──────────┘   └──────────┘   └───────────────┘   └─────────────────────┘   │
+│       │              │          │    │    │    │         │    │    │         │
+│       ▼              ▼          ▼    ▼    ▼    ▼         ▼    ▼    ▼         │
+│   [Notifier]    [사내 RDB]  [RAG] [MCP] [MCP] [MCP]  [RAG] [Notifier]        │
+│                             [Stats][T2SQL][Plot]            [지식DB]         │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────────┐  │
+│  │                              대화형 QA                                 │  │
+│  │                                                                        │  │
+│  │  ┌──────────┐                                                          │  │
+│  │  │QA Router │──┬── DATA_LOOKUP ──▶ QA Executor (T2SQL+Plot)           │  │
+│  │  │          │  ├── RESULT_DETAIL ▶ QA Executor (State)                │  │
+│  │  │          │  ├── GENERAL_QA ───▶ QA Executor (RAG)                  │  │
+│  │  │          │  └── RE_ANALYSIS ──▶ ReAnalysis Planner                 │  │
+│  │  └──────────┘                            │                             │  │
+│  │                                   ┌──────┴──────┐                      │  │
+│  │                                   │entry_point  │                      │  │
+│  │                                   │판단 후      │                      │  │
+│  │                                   │Statistics   │                      │  │
+│  │                                   │Agent 재진입  │                     │  │
+│  │                                   └─────────────┘                      │  │
+│  │                                                                        │  │
+│  │  ┌──────────────┐                                                      │  │
+│  │  │ Response Node│ ◀── 모든 경로의 결과 수렴                            │  │
+│  │  └──────────────┘                                                      │  │
+│  └────────────────────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## 2. 문제 정의(As-Is VS To-Be)
+## 3. MCP 서버 도구 구성
 
-### 2.1. 추진 배경 및 현황
+Statistics Agent와 QA Executor가 공유하는 MCP 도구들을 먼저 정의한다.
 
-현재 제조 공정의 품질 이상 분석 업무는 엔지니어 개인의 역량과 수작업에 의존하고 있어, 분석의 **신속성**과 **정확성** 확보에 한계가 존재함.
+### 3.1 MCP 통계 도구 (Statistics Tools)- i facts 사용예정
 
-- **Pain Point 1: 데이터의 파편화 및 비효율적 전처리**
-실시간으로는 MES, FDC, MI 데이터가 물리적으로 분리되어 있어, 통계 분석을 위한 Lot 단위 데이터 조회 및 전처리 작업에 전체 분석 시간의 60% 이상이 소요됨.
-- **Pain Point 2: 직관에 의존한 의사결정**
-    - 통계적 검증 없이 경험적 추론("지난번엔 가스 문제였으니 이번에도 가스겠지")에 의존하여, 오판 및 불필요한 부품 교체 비용 발생.
-- **Pain Point 3: 높은 업무 부하**
-    - 다발적인 알람 발생 시, 우선순위 선정이 어렵고 단순 반복적인 로그 조회 업무로 인해 엔지니어의 피로도 누적 및 핵심 업무(수율 개선) 집중도 저하.
+| 도구명 | 기능 | 사용 주체 |
+| --- | --- | --- |
+| `correlation_analysis` | 상관분석 | Statistics Agent |
+| `regression_analysis` | 회귀분석 | Statistics Agent |
+| `anova_test` | 분산분석 | Statistics Agent |
+| `t_test` | t-검정 | Statistics Agent |
+| `chi_square_test` | 카이제곱 검정 | Statistics Agent |
+| `pca_analysis` | 주성분분석 | Statistics Agent |
+| `time_series_decomposition` | 시계열 분해 | Statistics Agent |
+| `control_chart_analysis` | 관리도 분석 | Statistics Agent |
 
-### 2.2. As-Is VS To-Be
+### 3.2 MCP 데이터 도구 (Data Tools) — 공유 도구
 
-| **단계 (DMAIC)** | **As-Is (엔지니어의 수동 분석)** | **To-Be (AI 에이전트와 협업 분석)** |  |
+| 도구명 | 기능 | 사용 주체 |
+| --- | --- | --- |
+| `text_to_sql` | 자연어 → SQL 변환 및 실행 | Statistics Agent, QA Executor |
+| `plot_generator` | 데이터 시각화 자료 생성 | Statistics Agent, QA Executor |
+
+### 3.2.1 text_to_sql 도구 상세
+
+```python
+@mcp_tool
+def text_to_sql(
+    natural_query: str,       # "ETCH-01 장비의 최근 일주일 gas flow"
+    target_db: str,           # "eqp_sensor" | "metrology" | "material" | "process"
+    filters: dict = None,     # 추가 필터 조건 (선택)
+) -> dict:
+    """
+    내부 동작 (MCP 서버 측):
+      1. target_db의 스키마 조회
+      2. LLM으로 SQL 생성
+      3. SQL 실행
+      4. 실패 시 에러 분석 → SQL 수정 → 재시도 (최대 3회)
+      5. 결과 반환
+    """
+    return {
+        "sql": "SELECT timestamp, gas_flow_rate FROM ...",
+        "data": [{"timestamp": "...", "gas_flow_rate": 45.2}, ...],
+        "columns": ["timestamp", "gas_flow_rate"],
+        "column_types": {"timestamp": "datetime", "gas_flow_rate": "float"},
+        "row_count": 168,
+        "execution_time_ms": 230,
+    }
+```
+
+### 3.2.2 plot_generator 도구 상세
+
+```python
+@mcp_tool
+def plot_generator(
+    data: list[dict],         # text_to_sql 결과 등
+    chart_type: str,          # "line" | "scatter" | "bar" | "histogram" | "heatmap" | "control_chart"
+    x: str,                   # x축 컬럼
+    y: str | list[str],       # y축 컬럼 (다중 가능)
+    title: str = None,
+    options: dict = None,     # 축 범위, 색상, 관리한계선 등
+) -> dict:
+    return {
+        "image_url": "/plots/abc123.png",
+        "image_base64": "...",
+        "chart_type": "line",
+        "data_summary": {"x_range": [...], "y_range": [...]},
+    }
+```
+
+---
+
+## 4. 노드/에이전트 상세 설계
+
+### 4.1 Monitor Node (감시 노드) — `Step 1~2`
+
+> **유형: LangGraph Node (비-LLM)**
+LLM이 필요 없는 규칙 기반 로직이므로 일반 노드로 구현
+> 
+
+| 항목 | 내용 |
+| --- | --- |
+| **역할** | Metrology 데이터 스트림을 SPC 관리도 기준으로 모니터링하여 이상 감지 |
+| **입력** | Metrology 측정 데이터 (RDB 또는 스트리밍) |
+| **처리** | SPC Rule 위반 체크 (Nelson Rules, Western Electric Rules 등) |
+| **출력** | 이상 감지 이벤트 (위반 유형, 해당 데이터 포인트, 시간, 공정/장비 정보) |
+| **외부 연동** | Notifier 서비스 → 엔지니어 이메일/Slack 알림 발송 |
+
+```python
+class MonitorNode:
+    def run(self, state):
+        data = fetch_metrology_data()
+        violations = spc_check(data, rules=state["spc_rules"])
+        if violations:
+            notify_engineer(violations)
+            return {"violations": violations, "raw_data": data, "goto": "classify"}
+        return {"goto": "END"}
+```
+
+**설계 포인트:**
+
+- 주기적 polling 또는 이벤트 트리거 방식 선택 가능
+- SPC 룰은 설정 파일/DB로 관리 (관리도 종류, 관리한계선 등)
+- 이 노드는 LangGraph의 **진입점(Entry Point)** 역할
+
+---
+
+### 4.2 Classify Node (문제 분류 노드) — `Step 3`
+
+> **유형: LangGraph Node (LLM 사용)**
+감지된 이상을 해석하고 구조화된 문제 설명을 생성
+> 
+
+| 항목 | 내용 |
+| --- | --- |
+| **역할** | 감지된 이상 데이터를 분석하여 문제 유형 분류 및 컨텍스트 정보 수집 |
+| **입력** | Monitor Node의 이상 감지 이벤트 + Raw Data |
+| **처리** | ① 이상 유형 분류 (Drift, Shift, Out-of-Spec 등)
+② 관련 공정/자재/장비 정보 조회
+③ 문제 상황 자연어 요약 생성 |
+| **출력** | 구조화된 문제 정의서 (Problem Context) |
+| **외부 연동** | 사내 RDB (공정 정보, 자재 정보, 장비 이력 등) |
+
+```python
+problem_context = {
+    "issue_type": "CD_DRIFT",
+    "description": "Layer3 CD 값이 지속적으로 상승 추세를 보이며...",
+    "affected_process": "ETCH-01",
+    "equipment_id": "EQP-A301",
+    "material_lot": "LOT-20250210-A",
+    "time_range": ["2025-02-10T08:00", "2025-02-10T14:00"],
+    "data_summary": { ... },
+}
+```
+
+**설계 포인트:**
+
+- LLM이 데이터 패턴을 해석하여 문제 유형을 분류
+- 공정/자재/장비 정보는 RDB 조회로 풍부한 컨텍스트 확보
+- 이 노드의 출력이 이후 모든 노드의 **공유 컨텍스트** 역할
+
+---
+
+### 4.3 Statistics Agent (통계 분석 에이전트) — `Step 4`
+
+> **유형: LangGraph Sub-Agent (LLM + Tool Use)**
+> 
+
+내부적으로 3개의 서브 노드로 구성:
+
+```
+┌─ Statistics Agent ──────────────────────────────────────┐
+│                                                          │
+│  [4-1. Column Selector]                                  │
+│         │  RAG + LLM                                     │
+│         ▼                                                │
+│  [4-2. Tool Selector]                                    │
+│         │  LLM → MCP Tool 선택                           │
+│         ▼                                                │
+│  [4-3. Executor]                                         │
+│         │  MCP Tool 호출:                                │
+│         │    • text_to_sql (데이터 조회)                  │
+│         │    • 통계 도구 (correlation, regression 등)     │
+│         │  → 통계 결과 반환                              │
+│         ▼                                                │
+│  (반복 가능: 추가 분석 필요 시 4-1로 회귀)               │
+│                                                          │
+│  ※ reanalysis_plan이 존재하면 entry_point부터 재진입     │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+```
+
+### 4.3.1 Column Selector (후보 변수 선정)
+
+| 항목 | 내용 |
+| --- | --- |
+| **역할** | 문제와 연관될 가능성이 있는 데이터 컬럼/변수 후보군 선정 |
+| **입력** | Problem Context + 사내 문서 RAG 검색 결과 (+ reanalysis_plan의 override_columns) |
+| **처리** | RAG로 사내 문서 검색 → 관련 변수/파라미터 후보 추출 → LLM이 판단하여 최종 후보 리스트 생성. reanalysis_plan의 override_columns가 있으면 기존 후보에 반영 |
+| **출력** | 분석 대상 후보 컬럼 리스트 + 선정 근거 |
+| **외부 연동** | RAG (사내 기술문서, SOP, 과거 분석 리포트), 사내 RDB 스키마 정보 |
+
+```python
+# 최초 실행 시
+candidate_columns = [
+    {"column": "gas_flow_rate", "source_db": "eqp_sensor", "reason": "사내 SOP에 따르면 ..."},
+    {"column": "chamber_pressure", "source_db": "eqp_sensor", "reason": "과거 분석 리포트에서 ..."},
+    {"column": "rf_power", "source_db": "eqp_sensor", "reason": "..."},
+    {"column": "wafer_thickness", "source_db": "material", "reason": "..."},
+]
+
+# reanalysis_plan.override_columns = {"add": ["esc_temp"], "remove": ["rf_power"]} 인 경우
+# → 기존 후보에서 rf_power 제거, esc_temp 추가하여 재구성
+```
+
+### 4.3.2 Tool Selector (통계 기법 선택)
+
+| 항목 | 내용 |
+| --- | --- |
+| **역할** | 현재 문제 유형과 데이터 특성에 맞는 최적의 통계 분석 기법 선택 |
+| **입력** | Problem Context + 후보 컬럼 리스트 + MCP 서버 가용 도구 목록 (+ reanalysis_plan의 override_tools) |
+| **처리** | LLM이 문제 유형/데이터 특성 고려하여 MCP 서버의 통계 도구 중 적절한 것 선택. override_tools가 있으면 강제 포함/제외 반영 |
+| **출력** | 선택된 통계 도구 + 실행 파라미터 |
+| **외부 연동** | MCP Server (도구 목록 조회) |
+
+```python
+# 최초 실행 시
+selected_tools = [
+    {"tool": "correlation_analysis", "params": {"target": "cd_value", "features": [...]}},
+    {"tool": "regression_analysis", "params": {"target": "cd_value", "features": [...]}},
+]
+
+# reanalysis_plan.override_tools = {"force_include": ["pca_analysis"]} 인 경우
+# → LLM이 기존 도구 유지 여부 판단 + pca_analysis 강제 추가
+```
+
+### 4.3.3 Executor (통계 실행 및 결과 반환)
+
+| 항목 | 내용 |
+| --- | --- |
+| **역할** | MCP Tool을 호출하여 실제 통계 분석 실행 후 Raw 결과 반환 |
+| **입력** | 선택된 통계 도구 + 파라미터 + 후보 컬럼 정보 |
+| **처리** | ① `text_to_sql`로 후보 컬럼의 실제 데이터 조회 ② 통계 도구로 분석 실행 |
+| **출력** | 통계 분석 Raw 결과 (수치, p-value, 계수 등) — **해석 없이 결과만** |
+| **외부 연동** | MCP Server: `text_to_sql` + 통계 도구 실행 |
+
+```python
+# Executor 동작 흐름
+# 1) 데이터 조회 (MCP: text_to_sql)
+data = mcp_call("text_to_sql", {
+    "natural_query": "ETCH-01 장비의 gas_flow_rate, chamber_pressure 최근 7일",
+    "target_db": "eqp_sensor"
+})
+
+# 2) 통계 분석 실행 (MCP: 통계 도구)
+stat_results = {
+    "correlation_analysis": {
+        "gas_flow_rate": {"r": 0.87, "p_value": 0.001},
+        "chamber_pressure": {"r": 0.42, "p_value": 0.045},
+    },
+    "regression_analysis": {
+        "r_squared": 0.82,
+        "coefficients": {"gas_flow_rate": 1.23, "chamber_pressure": 0.45},
+        "f_statistic": 34.7,
+        "p_value": 0.0001,
+    }
+}
+```
+
+### 4.3.4 Statistics Agent의 재진입 처리 로직
+
+reanalysis_plan이 State에 존재하면, entry_point에 따라 해당 서브노드부터 실행을 시작합니다:
+
+```python
+class StatisticsAgent:
+    def run(self, state):
+        plan = state.get("reanalysis_plan")
+
+        if plan:
+            entry = plan["entry_point"]
+
+            # 데이터 조건 변경이 있으면 problem_context 업데이트
+            if plan.get("override_filters"):
+                state["problem_context"].update(plan["override_filters"])
+
+            if entry == "executor":
+                return self.executor(state)         # 동일 조건 재실행
+            elif entry == "tool_selector":
+                return self.tool_selector(state)    # 도구 선택부터
+            elif entry == "column_selector":
+                return self.column_selector(state)  # 컬럼 선정부터
+        else:
+            return self.column_selector(state)      # 최초 실행
+```
+
+**설계 포인트 (Statistics Agent 전체):**
+
+- 반복 루프 가능: Executor 결과가 불충분하면 Column Selector로 돌아가 추가 변수 탐색
+- LLM의 역할은 "어떤 데이터를 볼지", "어떤 기법을 쓸지" **판단**하는 것
+- 실제 데이터 조회는 `text_to_sql`, 통계 연산은 통계 MCP Tool이 수행
+- 결과는 해석 없이 순수 통계값만 출력 → 해석은 Reporter Agent가 담당
+- **재분석 시**: reanalysis_plan의 entry_point에 따라 내부 서브노드를 선택적으로 재진입
+
+---
+
+### 4.4 Reporter Agent (리포트 생성 에이전트) — `Step 5`
+
+> **유형: LangGraph Sub-Agent (LLM + RAG + Tool Use)**
+통계 결과 해석, 대응방안 제시, 리포트 생성까지 담당
+> 
+
+내부적으로 3개의 서브 노드로 구성:
+
+```
+┌─ Reporter Agent ────────────────────────────────────────┐
+│                                                          │
+│  [5-1. Interpreter]                                      │
+│         │  통계 결과 → 자연어 해석 + 시각화              │
+│         ▼                                                │
+│  [5-2. Action Advisor]                                   │
+│         │  RAG 기반 대응방안 제시                        │
+│         ▼                                                │
+│  [5-3. Report Generator]                                 │
+│         │  최종 리포트 생성 + 알림 발송 + 지식 축적      │
+│                                                          │
+│  ※ RE_ANALYSIS 경유 시: Interpreter만 실행 후 Response로 │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+```
+
+### 4.4.1 Interpreter (통계 결과 해석)
+
+| 항목 | 내용 |
+| --- | --- |
+| **역할** | Statistics Agent의 Raw 통계 결과를 엔지니어가 이해할 수 있는 자연어로 해석 |
+| **입력** | 통계 Raw 결과 + Problem Context |
+| **처리** | LLM이 통계 결과 해석 + `plot_generator`로 시각화 생성 |
+| **출력** | 자연어 해석 + 시각화 이미지 |
+| **외부 연동** | MCP: `plot_generator` |
+
+```python
+interpretation = {
+    "summary": "CD drift의 주요 원인은 gas_flow_rate로 판단됩니다 (r=0.87, p<0.01).",
+    "key_factors": [
+        {"column": "gas_flow_rate", "impact": "HIGH", "detail": "상관계수 0.87로 강한 양의 상관..."},
+        {"column": "chamber_pressure", "impact": "MEDIUM", "detail": "..."},
+    ],
+    "plots": [
+        {"image_url": "/plots/scatter_gasflow_cd.png", "description": "Gas Flow vs CD scatter"},
+        {"image_url": "/plots/control_chart_cd.png", "description": "CD 관리도"},
+    ]
+}
+```
+
+### 4.4.2 Action Advisor (대응방안 제시)
+
+| 항목 | 내용 |
+| --- | --- |
+| **역할** | 분석 결과를 기반으로 구체적인 대응 조치 제안 |
+| **입력** | 해석 결과 + RAG 검색 (사내 SOP, 과거 대응 이력) |
+| **처리** | RAG로 유사 사례/SOP 검색 → LLM이 맞춤형 대응방안 생성 |
+| **출력** | 대응방안 리스트 (담당자, 조치 내용, 우선순위) |
+| **외부 연동** | RAG (사내 SOP, 과거 대응 이력, 담당자 정보) |
+
+```python
+actions = [
+    {
+        "priority": 1,
+        "action": "ETCH-01 장비 Gas MFC 교정 점검",
+        "assignee": "설비팀 김OO (내선 1234)",
+        "reference": "SOP-ETCH-042 Section 3.2",
+        "deadline": "즉시",
+    },
+    {
+        "priority": 2,
+        "action": "Gas 공급 라인 Leak 점검",
+        "assignee": "설비팀 박OO (내선 1235)",
+        "reference": "PM Checklist #ETH-017",
+        "deadline": "24시간 이내",
+    },
+]
+```
+
+### 4.4.3 Report Generator (리포트 생성 및 배포)
+
+| 항목 | 내용 |
+| --- | --- |
+| **역할** | 전체 분석 과정을 종합 리포트로 생성 + 알림 + 지식DB 축적 |
+| **입력** | Problem Context + 통계 결과 + 해석 + 시각화 + 대응방안 |
+| **처리** | ① 리포트 문서 생성 ② 엔지니어 알림 발송 ③ 지식DB 저장 |
+| **출력** | 최종 리포트 (PDF/HTML) |
+| **외부 연동** | Notifier, 사내 지식DB, Vue 프론트엔드 |
+
+```python
+report_structure = {
+    "title": "품질 이상 분석 리포트 - ETCH CD Drift",
+    "timestamp": "2025-02-11T15:30:00",
+    "sections": [
+        "1. 문제 감지 개요",
+        "2. 문제 분류 및 상세",
+        "3. 통계 분석 과정 및 결과 (시각화 포함)",
+        "4. 핵심 원인 분석",
+        "5. 권장 대응 조치",
+        "6. 참고 문서 및 이력",
+    ]
+}
+```
+
+---
+
+### 4.5 대화형 QA 시스템 — `Step 6`
+
+> **유형: LangGraph 노드 체인 (Router → Executor/Planner → Response)**
+엔지니어가 분석 결과에 대해 추가 질문하는 대화형 인터페이스
+> 
+
+Step 6은 QA Router를 중심으로 4가지 intent 경로와 RE_ANALYSIS 전용 ReAnalysis Planner로 구성됩니다.
+
+```
+┌─ Step 6: 대화형 QA 시스템 ──────────────────────────────────────────────┐
+│                                                                          │
+│  사용자 질문                                                             │
+│       │                                                                  │
+│       ▼                                                                  │
+│  ┌──────────────────────────────────────────────┐                        │
+│  │           QA Router Node (LLM)               │                        │
+│  │                                              │                        │
+│  │  질문 분석 → intent 분류:                    │                        │
+│  │    • DATA_LOOKUP   (데이터 조회/시각화)      │                        │
+│  │    • RESULT_DETAIL (기존 결과 상세)          │                        │
+│  │    • RE_ANALYSIS   (추가/재분석 요청)        │                        │
+│  │    • GENERAL_QA    (일반 질문)               │                        │
+│  └──┬───────┬────────────┬──────────────┬───────┘                        │
+│     │       │            │              │                                │
+│   DATA   RESULT      RE_ANALYSIS     GENERAL                            │
+│     │       │            │              │                                │
+│     ▼       ▼            ▼              ▼                                │
+│  ┌──────┐ ┌──────┐ ┌──────────────────────────────┐ ┌──────┐            │
+│  │QA Ex.│ │QA Ex.│ │   ReAnalysis Planner (LLM)   │ │QA Ex.│            │
+│  │T2SQL │ │State │ │                              │ │RAG   │            │
+│  │+Plot │ │참조  │ │  사용자 요청 파싱:            │ │+State│            │
+│  └──┬───┘ └──┬───┘ │   • 변경할 변수 (컬럼)      │ └──┬───┘            │
+│     │        │     │   • 변경할 통계 기법         │    │                │
+│     │        │     │   • 변경할 데이터 조건       │    │                │
+│     │        │     │   • 변경 없음 (동일 재실행)  │    │                │
+│     │        │     │                              │    │                │
+│     │        │     │  → reanalysis_plan 생성      │    │                │
+│     │        │     │  → entry_point 결정          │    │                │
+│     │        │     └──────────────┬───────────────┘    │                │
+│     │        │                    │                     │                │
+│     │        │                    ▼                     │                │
+│     │        │           Statistics Agent               │                │
+│     │        │           (entry_point부터 재진입)        │                │
+│     │        │                    │                     │                │
+│     │        │                    ▼                     │                │
+│     │        │              Interpreter                 │                │
+│     │        │              (해석만 수행)                │                │
+│     │        │                    │                     │                │
+│     └────────┴────────────────────┴─────────────────────┘                │
+│                        │                                                 │
+│                        ▼                                                 │
+│              ┌──────────────────┐                                        │
+│              │  Response Node   │                                        │
+│              │  (답변 포맷팅)    │                                        │
+│              └────────┬─────────┘                                        │
+│                       ▼                                                  │
+│                사용자에게 응답                                            │
+│              (+ 추가 질문 대기)                                           │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+### 4.5.1 QA Router Node (질문 분류)
+
+| 항목 | 내용 |
+| --- | --- |
+| **역할** | 사용자 질문의 의도를 분류하여 적절한 처리 경로로 라우팅 |
+| **입력** | 사용자 질문 + 대화 이력 |
+| **처리** | LLM이 질문을 4가지 intent 중 하나로 분류 |
+| **출력** | intent 라벨 + 파싱된 질문 파라미터 |
+
+```python
+intent_examples = {
+    "DATA_LOOKUP": [
+        "ETCH-01 장비의 gas flow 데이터 보여줘",
+        "최근 일주일 CD 측정값 추이 그래프로 보여줘",
+        "LOT-20250210-A의 wafer thickness 분포 보여줘",
+    ],
+    "RESULT_DETAIL": [
+        "상관분석 결과 중 chamber_pressure 더 자세히 설명해줘",
+        "왜 gas_flow_rate가 주요 원인이라고 판단한 거야?",
+        "회귀분석 R² 값이 뭘 의미하는 거야?",
+    ],
+    "RE_ANALYSIS": [
+        "같은 조건으로 다시 돌려봐",
+        "rf_power도 추가해서 다시 해봐",
+        "이번엔 PCA로 해봐",
+        "최근 3일만 잘라서 다시 해봐",
+        "ETCH-02 장비 데이터로도 해봐",
+    ],
+    "GENERAL_QA": [
+        "과거에 비슷한 문제 있었어?",
+        "ETCH 공정에서 CD drift 주요 원인이 보통 뭐야?",
+        "SOP에 이런 경우 어떻게 하라고 되어 있어?",
+    ],
+}
+```
+
+### 4.5.2 QA Executor Node (질문 실행 — DATA, RESULT, GENERAL)
+
+| 항목 | 내용 |
+| --- | --- |
+| **역할** | intent에 따라 적절한 도구를 사용하여 질문에 대한 답변 데이터 생성 |
+| **입력** | intent + 파싱된 질문 + 전체 State |
+| **처리** | intent별로 다른 도구 세트를 사용 |
+| **출력** | 답변 데이터 (텍스트, 테이블, 시각화 등) |
+
+| Intent | 사용 도구 | 동작 |
+| --- | --- | --- |
+| DATA_LOOKUP | `text_to_sql` + `plot_generator` | DB에서 데이터 조회 → 시각화 생성 |
+| RESULT_DETAIL | State 참조 (도구 불필요) | 기존 분석 결과에서 상세 설명 생성 |
+| GENERAL_QA | RAG 검색 + State 참조 | 사내 문서 검색 + 기존 컨텍스트 활용 |
+
+```python
+# DATA_LOOKUP 실행 예시
+# 사용자: "ETCH-01 gas flow 추이 보여줘"
+
+# 1) text_to_sql로 데이터 조회
+data_result = mcp_call("text_to_sql", {
+    "natural_query": "ETCH-01 장비의 gas_flow_rate 최근 7일 시간순",
+    "target_db": "eqp_sensor"
+})
+
+# 2) plot_generator로 시각화
+plot_result = mcp_call("plot_generator", {
+    "data": data_result["data"],
+    "chart_type": "line",
+    "x": "timestamp",
+    "y": "gas_flow_rate",
+    "title": "ETCH-01 Gas Flow Rate Trend (최근 7일)"
+})
+```
+
+### 4.5.3 ReAnalysis Planner Node (재분석 계획 수립 — RE_ANALYSIS 전용)
+
+| 항목 | 내용 |
+| --- | --- |
+| **역할** | 사용자의 재분석 요청을 파싱하여 Statistics Agent의 재진입 조건 구성 |
+| **입력** | 사용자의 재분석 요청 + 기존 분석 State (candidate_columns, selected_tools, problem_context) |
+| **처리** | LLM이 기존 분석 조건과 사용자 요청을 비교하여 변경 사항 추출 → entry_point 및 override 파라미터 결정 |
+| **출력** | reanalysis_plan (State에 저장) |
+
+**RE_ANALYSIS 4가지 케이스:**
+
+| 케이스 | 사용자 발화 예시 | 변경되는 것 | entry_point |
 | --- | --- | --- | --- |
-| **D**efine
-(문제 정의) |  알람 수신 후 설비 이력(History) 조회
-• 경험칙상 알람 발생 시점 부근의 주요 이벤트 2건(가스, PM) 식별 | • 알람과 동시에 이벤트 2건이 포함된
-요약 리포트 수신 (Context 파악 완료) | **탐색 시간 단축**
- |
-| **M**easure
-(데이터 수집) | • FDC, 계측 데이터를 CSV로 각각 다운로드
-• 엑셀/Spotfire에서 Key(Time/Wafer) 매핑
- | • 에이전트가 타임스탬프 기준으로 이벤트-계측 데이터 매핑하여 제공 | **전처리 자동화**
- |
-| **A**nalyze
-(원인 분석) | • JMP/Minitab 실행
-• 가설 1(가스) 검증 → 기각 (20분 소요)
-• 가설 2(PM) 검증 → **채택** (20분 소요) | • **동시적 스크리닝 가능**
-• 엔지니어: *"가스랑 PM 둘 다 p-value 구해봐"*
-• AI agent: 가스(0.45) vs **PM(0.001)** 동시 비교 제시
-• 유력 후보 즉시 식별 | **검증  업무 속도 대폭 감소** |
-| **I**mprove
-(개선 대책) | • 분석 결과 확인 후 링 교체 결정
-• 판단은 문제 없으나, 분석 시간만큼 조치 지연 | • 분석 대기 시간 없이 즉시 교체 결정
-• 골든 타임 확보로 수율 손실 최소화 | **리드타임 단축** |
-| **C**ontrol
-(관리/보고) | • JMP 차트 캡처하여 보고서(8D, OCAP) 등 작성
-• 분석 로직이 개인의 노하우로만 남음 | • 통계 분석 및 조치 내역 구조를 레포트로 작성하여 저장함.
-• 이후 유사 불량 발생 시 AI가 먼저 기존 분석 방법 제안함 | **지식 공유** |
+| **A. 동일 재실행** | "같은 조건으로 다시 돌려봐" | 없음 | `executor` |
+| **B. 변수 변경** | "rf_power도 추가해서 다시 해봐" | 후보 컬럼 | `column_selector` |
+| **C. 기법 변경** | "이번엔 PCA로 해봐" | 통계 도구 | `tool_selector` |
+| **D. 데이터 조건 변경** | "최근 3일만 잘라서", "ETCH-02로 해봐" | 데이터 범위/대상 | `column_selector` |
+
+```python
+# 케이스별 reanalysis_plan 출력 예시
+
+# A. 동일 재실행
+reanalysis_plan = {
+    "entry_point": "executor",
+    "override_columns": None,
+    "override_tools": None,
+    "override_filters": None,
+    "user_instruction": "동일 조건 재실행",
+}
+
+# B. 변수 변경
+reanalysis_plan = {
+    "entry_point": "column_selector",
+    "override_columns": {
+        "add": ["rf_power", "esc_temp"],
+        "remove": [],
+        "replace_all": False,           # 기존 컬럼 유지하면서 추가
+    },
+    "override_tools": None,
+    "override_filters": None,
+    "user_instruction": "rf_power, ESC 온도 추가 분석",
+}
+
+# C. 기법 변경
+reanalysis_plan = {
+    "entry_point": "tool_selector",
+    "override_columns": None,
+    "override_tools": {
+        "force_include": ["pca_analysis"],
+        "force_exclude": [],
+    },
+    "override_filters": None,
+    "user_instruction": "PCA 분석 추가 수행",
+}
+
+# D. 데이터 조건 변경
+reanalysis_plan = {
+    "entry_point": "column_selector",
+    "override_columns": None,
+    "override_tools": None,
+    "override_filters": {
+        "time_range": ["2025-02-08T00:00", "2025-02-11T00:00"],
+        "equipment_id": "EQP-A302",
+    },
+    "user_instruction": "ETCH-02 장비, 최근 3일 데이터로 재분석",
+}
+```
+
+### 4.5.4 RE_ANALYSIS 실행 흐름
+
+```
+ReAnalysis Planner
+        │
+        │ reanalysis_plan 생성
+        ▼
+ Statistics Agent
+ (entry_point에 따라 재진입)
+        │
+        │                   ┌─ entry_point = "executor" ─────▶ Executor만 실행
+        ├── 재진입 분기 ────┤─ entry_point = "tool_selector" ▶ Tool Selector → Executor
+        │                   └─ entry_point = "column_selector" ▶ Column Selector → Tool Selector → Executor
+        │
+        ▼
+  Interpreter (해석만 수행)
+        │
+        ▼
+  Response Node (포맷팅 → 사용자 응답)
+```
+
+**설계 포인트:**
+
+- ReAnalysis Planner가 "무엇이 변경되었는지" 파싱하는 책임 전담
+- Statistics Agent는 plan에 따라 실행만 수행 → 역할 분리 명확
+- 재분석 경로에서는 Reporter Agent의 Action Advisor, Report Generator는 건너뛰고 **Interpreter만 실행** (재분석 결과 해석만 필요하므로)
+
+### 4.5.5 Response Node (응답 포맷팅)
+
+| 항목 | 내용 |
+| --- | --- |
+| **역할** | 모든 경로(DATA, RESULT, RE_ANALYSIS, GENERAL)의 결과를 사용자 친화적 형태로 포맷팅 |
+| **입력** | QA Executor 또는 Interpreter의 결과 |
+| **처리** | LLM이 결과를 자연어 + 시각화로 구성 |
+| **출력** | 최종 응답 (프론트엔드 렌더링용) |
 
 ---
 
-## 3. 사용 Data 정의
+## 5. LangGraph State 설계
 
-### 3.1. 계측 데이터 (Metrology / MI)
+```python
+from typing import TypedDict, List, Optional, Annotated
+from langgraph.graph import add_messages
 
-- **역할:** 불량의 구체적인 양상을 파악하는 공정 결과 계측 데이터
-예시
-    
-    
-    | **컬럼명** | **데이터 타입** | **설명** |
-    | --- | --- | --- |
-    | **Lot ID(lot_id)** | String | Lot ID |
-    | **웨이퍼 ID(wafer_id)** | String | 웨이퍼 ID |
-    | **측정 위치(site_loc)** | String | 측정 포인트 (Center / Middle / Edge) |
-    | **계측값 (cd_value)** | Float | 식각 후 선폭 측정값 (단위: nm) |
+class QualityAgentState(TypedDict):
+    # === Step 1-2: Monitor ===
+    raw_data: dict                          # Metrology 원본 데이터
+    spc_rules: dict                         # SPC 관리도 규칙 설정
+    violations: List[dict]                  # 감지된 이상 목록
 
-### 3.2. 설비 보전 이력 (MES) (mi data 기간 외에도 더 과거도 필요함)
+    # === Step 3: Classify ===
+    problem_context: dict                   # 구조화된 문제 정의
 
-- **역할:** 불량의 원인 후보 중 부품 노후화를 검증하기 위한 데이터로 엔지니어의 정비 활동을 기록한 PM 이력 데이터
-    
-    
-    | **컬럼명** | 데이터 타입 | 설명 |
-    | --- | --- | --- |
-    | Date(date) | Date | PM 날짜 |
-    | 장비 ID (eqp_id) | String | 장비 ID |
-    | PM 유형(pm_type) | String | PM 사유 및 세부 내용 (ex. Parts_Replace) |
-    | 교체 부품(part_id) | String | 파트명 |
-    | 작업자(operator) | String | 설비 보전 진행한 작업자 |
-    | 특이사항(comment) | String | 보전 작업 세부 내용 및 특이사항(작업자 별 페르소나가 포함된 온전한 문장) |
+    # === Step 4: Statistics ===
+    candidate_columns: List[dict]           # 후보 변수 리스트
+    selected_tools: List[dict]              # 선택된 통계 도구
+    stat_results: dict                      # 통계 분석 Raw 결과
+    fetched_data: dict                      # text_to_sql로 조회한 데이터 캐시
+    analysis_iteration: int                 # 반복 분석 횟수
 
-### 3.3. 설비 센서 데이터 (FDC)
+    # === Step 5: Reporter ===
+    interpretation: dict                    # 통계 해석 결과
+    plots: List[dict]                       # 생성된 시각화 목록
+    recommended_actions: List[dict]         # 대응방안
+    report: dict                            # 최종 리포트
 
-- **역할:** 불량의 원인 후보 중 설비 이상을 검증하기 위한 데이터(문제가 없을 데이터)
-    
-    
-    | **컬럼명** | **데이터 타입** | **설명** |
-    | --- | --- | --- |
-    | etch_run_id(lot_id) | String | etch_run_id |
-    | 챔버 압력(pressure) | Float | 공정 중 평균 압력 (Torr) |
-    | 척 온도(temp_chuck) | Float | 웨이퍼 척킹 온도 (℃) |
-    | RF 파워(bias_power) | Float | 하부 전극 Bias Power (W) |
-    | source_power | Float | 상부 전극 Source RF Power (W) |
-    | gas_flow_total | Float | 전체 공정 가스 유량 합 (sccm) |
-    | helium_backside_pressure | Float | He backside cooling 압력 (Torr) |
+    # === Step 6: Interactive QA ===
+    messages: Annotated[list, add_messages] # 대화 이력
+    current_query: Optional[str]            # 현재 사용자 질문
+    current_intent: Optional[str]           # 분류된 intent
+    reanalysis_plan: Optional[dict]         # 재분석 계획 (RE_ANALYSIS 시)
+    qa_response: Optional[dict]             # QA 응답 데이터
 
-### 3.4. 파트 BOM / 현업에서 어떤 형태가 많은지 파악 필요, 문서형태가 많을 수도 있음
-
-- **역할:** 부품의 **스펙(Spec)과 수명 기준**을 정의(2번과 연계됨)
-    
-    
-    | **컬럼명** | **데이터 타입** | **설명** |
-    | --- | --- | --- |
-    | 장비명(eqp_model) | String | CNT_ETCHER_V1 |
-    | 파트 id(part_id) | String | P_001 |
-    | 파트명(part_name) | String | **Focus_Ring_Quartz** |
-    | 파트 수명(life_limit) | Float | **1,000** |
-    | 단위(unit) | String | Count (매) |
+    # === Step 4 이력 관리 (재분석 비교용) ===
+    analysis_history: List[dict]            # 과거 분석 결과 이력
+```
 
 ---
 
-## 4. 사용자 시나리오 및 워크 플로우
+## 6. LangGraph 흐름도
 
-### 4.1. Agent R&R
+```
+           ┌──────────┐
+           │  START    │
+           └────┬─────┘
+                ▼
+        ┌──────────────┐     이상 없음
+        │ Monitor Node │ ──────────────▶ END
+        └──────┬───────┘
+               │ 이상 감지 + 알림 발송
+               ▼
+        ┌──────────────┐
+        │ Classify Node│
+        └──────┬───────┘
+               ▼
+    ┌─────────────────────┐
+    │  Statistics Agent    │◀─────────────────────────────────────────┐
+    │  ┌────────────────┐ │                                          │
+    │  │ Column Selector│ │  ◀── entry_point="column_selector"       │
+    │  └───────┬────────┘ │                                          │
+    │          ▼          │                                          │
+    │  ┌────────────────┐ │                                          │
+    │  │ Tool Selector  │ │  ◀── entry_point="tool_selector"        │
+    │  └───────┬────────┘ │                                          │
+    │          ▼          │                                          │
+    │  ┌────────────────┐ │                                          │
+    │  │   Executor     │─┼── 내부 반복 루프                         │
+    │  │ (MCP: T2SQL +  │ │  ◀── entry_point="executor"             │
+    │  │  통계 도구)     │ │                                          │
+    │  └────────────────┘ │                                          │
+    └─────────┬───────────┘                                          │
+              ▼                                                      │
+    ┌─────────────────────┐                                          │
+    │   Reporter Agent    │                                          │
+    │  ┌────────────────┐ │  ◀── RE_ANALYSIS 경유 시 여기만 실행     │
+    │  │  Interpreter   │ │                                          │
+    │  │ (MCP: Plot Gen)│ │                                          │
+    │  └───────┬────────┘ │                                          │
+    │          ▼          │                                          │
+    │  ┌────────────────┐ │                                          │
+    │  │ Action Advisor │ │  (최초 실행 시에만)                       │
+    │  │ (RAG)          │ │                                          │
+    │  └───────┬────────┘ │                                          │
+    │          ▼          │                                          │
+    │  ┌────────────────┐ │                                          │
+    │  │Report Generator│ │  (최초 실행 시에만)                       │
+    │  └────────────────┘ │                                          │
+    └─────────┬───────────┘                                          │
+              ▼                                                      │
+    ┌─────────────────────────────┐                                  │
+    │  QA Router                  │                                  │
+    │  (intent 분류)              │                                  │
+    └──┬──────┬──────┬──────┬────┘                                   │
+       │      │      │      │                                        │
+     DATA  RESULT  RE_AN  GENERAL                                    │
+       │      │      │      │                                        │
+       ▼      ▼      │      ▼                                        │
+    ┌────────────┐   │   ┌────────────┐                              │
+    │QA Executor │   │   │QA Executor │                              │
+    │T2SQL + Plot│   │   │RAG + State │                              │
+    └─────┬──────┘   │   └─────┬──────┘                              │
+          │          │         │                                     │
+          │          ▼         │                                     │
+          │  ┌───────────────────────┐                               │
+          │  │ ReAnalysis Planner    │                               │
+          │  │ (변경사항 파싱 +      │                               │
+          │  │  entry_point 결정)    │                               │
+          │  └───────────┬───────────┘                               │
+          │              │ reanalysis_plan                           │
+          │              └───────────────────────────────────────────┘
+          │                                     Statistics Agent 재진입
+          └────────┬───────────┘
+                   ▼
+          ┌────────────────┐
+          │ Response Node  │
+          │ (포맷팅)       │
+          └────────┬───────┘
+                   │
+                   ▼
+            사용자에게 응답
+            (interrupt → 추가 질문 대기)
+                   │
+              ┌────┴────┐
+              │추가 질문 │──▶ QA Router (루프)
+              │종료     │──▶ END
+              └─────────┘
+```
 
-| **에이전트** | **분석 시 역할 (Read/Analyze)** | **학습 시 역할 (Write/Learn)** |
+---
+
+## 7. 외부 시스템 연동 정리
+
+| 외부 시스템 | 연동 방식 | 사용 노드/에이전트 |
 | --- | --- | --- |
-| **Orchestrator - 지웅** | 전체 조율 및 최종 리포트 작성 | 엔지니어의 피드백 수신 및 전체 학습 프로세스 지휘 |
-| **Data monitor - 지웅** | 4M/PARA 데이터 수집 및 정제 | 분석 당시의 데이터 스냅샷(Raw Context) 제공 |
-| **Stat analyzer - 세연** | 통계적 유의성 및 패턴 분석 | (학습 시에는 직접 개입 없음) |
-| **Docs researcher
-(검색 결과, 검색데이터 기반 답변 증강) - 현도** | 과거 사례 검색 및 vectorDB 조회 | 검색 결과 및 과거 이력 전송 |
-| **Strategy advisor - 도희** | 조치 옵션 생성 및 시뮬레이션 | 선택된 옵션의 성패 여부를 데이터화하여 기록,
-최종 지식 패키지 적재 (DB/Vector DB Write) |
-
-### **4.2. 분석 단계 (Analysis Phase Workflow)**
-
-1. **모니터링 및 트리거 (Monitoring & Trigger)**
-    ◦ **FastAPI Backend**가 설정된 주기에 따라 **Time Alert**를 발생시킵니다.
-    ◦ **Data Monitor**는 Alert 수신 시점 기준으로 최근 데이터의 이동 평균(Moving Average)을 계산합니다.
-    ◦ 평균값이 설정된 임계치를 벗어나는 **Drift(변동)** 현상이 포착되면, 변동 내용에 대한 요약(Summary)을 생성하여 **Orchestrator**에게 보고합니다.
-
-2. **이슈 전파 및 데이터 핸드셰이크 (Issue Propagation & Data Handshake)**
-    ◦ **Orchestrator**는 Data Monitor의 요약 리포트를 수신하고, **Stat Analyzer**에게 분석 명령을 하달합니다.
-    ◦ **Stat Analyzer**는 변동 사항을 인지한 후, **Data Monitor**에게 "Drift 시작점부터 현재까지의 전체 Raw Data"를 요청합니다.
-    ◦ **Data Monitor**는 요청받은 구간의 데이터를 추출하여 Stat Analyzer에게 전달합니다.
-
-3. **데이터 선별 및 정밀 조회 (Feature Selection & Query)**
-    ◦ **Stat Analyzer**는 1차 수신된 데이터를 검토하여, 통계 분석에 필요한 특정 파라미터, 컬럼, 보조 데이터(4M 등)를 선별(Scoping)합니다.
-    ◦ **Stat Analyzer**가 구체적인 "분석용 데이터 리스트"를 **Data Monitor**에게 재요청합니다.
-    ◦ **Data Monitor**는 **RDB(Supabase/PostgreSQL)**를 쿼리하여 요청받은 정밀 데이터를 추출 후 최종 전달합니다.
-
-4. **통계 분석 및 검증 (Analysis & Verification)**
-    ◦ **Stat Analyzer**는 확보된 데이터를 바탕으로 적절한 통계 도구(ANOVA, 상관분석 등)를 선정하여 수행하고, **순수 통계 결과값(Result)**을 도출하여 **Docs Researcher**에게 전달합니다.
-    ◦ **Docs Researcher**는 전달받은 통계 결과를 쿼리로 사용하여 **과거 문제 분석 리포트(Vector DB)**를 RAG로 검색합니다.
-    ◦ **Docs Researcher**는 "과거에도 이 통계 수치가 나왔을 때 동일 원인이었는지" 혹은 "다른 원인이었는지"를 비교하여 **검증(Cross-Validation) 의견**을 생성합니다.
-
-5. **전략 수립 및 리포팅 (Strategy & Reporting)**
-    ◦ **Docs Researcher**는 [통계 분석 결과 + 과거 사례 검증 의견]을 **Strategy Advisor**에게 전달합니다.
-    ◦ **Strategy Advisor**는 현재 상황, 통계적 근거, 과거 사례를 종합하여 **최종 사용자 리포트**를 생성합니다. (현상 정의, 원인 추정, 추천 Action, 담당자 연락처 포함)
-    ◦ 생성된 리포트는 사용자에게 전달(Slack/Dashboard)되며, 동시에 **Object Storage(S3)**에 "분석 완료 리포트" 형태로 저장(Archiving)됩니다.
-
-### **4.3. 지식 적재 단계 (Knowledge Accumulation)**
-
-• **자동화된 지식 축적:** 기존의 사용자 피드백 의존 방식에서 탈피하여, 분석 사이클이 종료되는 즉시 지식화가 이루어집니다.
-• **리포트 아카이빙:** **Strategy Advisor**가 작성한 최종 분석 리포트(Drift 감지 시점부터 분석 결과, 제안된 조치까지의 전체 맥락 포함)는 JSON 또는 PDF 형태로 변환되어 **S3**에 영구 저장됩니다.
-• **Vector DB 임베딩:** 저장된 리포트는 추후 **Docs Researcher**가 RAG를 수행할 수 있도록 텍스트 청킹(Chunking) 및 임베딩 과정을 거쳐 Vector DB에 자동 적재됩니다. 이를 통해 에이전트는 분석을 거듭할수록 "자가 검증 능력"이 향상됩니다.
-
-### **4.4. 사용 시나리오 (Usage Scenario)**
-
-**04:00 [Phase 1. 정기 모니터링 및 Drift 감지]**
-
-> • **FastAPI Backend:** 정기 Time Alert 발송.
-• **Data Monitor:** 최근 3시간 데이터의 평균 CD 값을 계산하던 중, 미세한 상향 Drift(평균 0.2% 상승) 패턴을 감지. "Edge CD 값의 비정상적 Drift 발생" 요약본을 생성하여 Orchestrator에게 전송.
-> 
-
-**04:01 [Phase 2. 분석 착수 및 데이터 확보]**
-
-> • **Orchestrator:** Drift 감지 사실을 **Stat Analyzer**에게 알리고 분석 모드 활성화.
-• **Stat Analyzer:** 상세 분석을 위해 **Data Monitor**에게 "금일 01:00부터 현재까지의 모든 공정 데이터"를 1차 요청.
-• **Data Monitor:** 해당 구간의 Raw Data 전송.
-• **Stat Analyzer:** 1차 데이터를 훑어본 후, 'Chamber 온도'와 'Gas 유량'과의 연관성을 의심. **Data Monitor**에게 "해당 기간의 Chamber Temp, Gas Flow A/B 컬럼 및 PM 이력 데이터"를 2차 정밀 요청.
-• **Data Monitor:** Supabase RDB에서 정확히 해당 컬럼만 쿼리하여 반환.
-> 
-
-**04:05 [Phase 3. 통계 분석 및 과거 사례 교차 검증]**
-
-> • **Stat Analyzer:** 다변량 분석 수행 결과, 'Chamber Temp'와 'CD값' 간의 상관계수 $r=0.88$ 도출. 이 수치 결과를 **Docs Researcher**에게 전달.
-• **Docs Researcher:** "상관계수 0.8 이상, Chamber Temp 변수"를 키워드로 과거 리포트 RAG 검색.
-    ◦ *검증 결과:* "2025년 11월 유사 사례 존재. 당시에도 온도 문제로 파악되었으나, 실제 원인은 센서 오작동이었음."이라는 검증 의견 확보.
-    ◦ 이 검증 의견과 통계 결과를 **Strategy Advisor**에게 전달.
-> 
-
-**04:10 [Phase 4. 종합 리포트 생성 및 아카이빙]**
-
-> • **Strategy Advisor:**
-    ◦ **상황:** Edge CD Drift 발생.
-    ◦ **분석:** Chamber Temp가 유력한 원인($r=0.88$)이나, 과거 센서 오작동 사례가 있으므로 센서 점검 우선 권장.
-    ◦ **Action:** "설비 보전팀 김철수 선임(010-xxxx-xxxx)에게 센서 캘리브레이션 요청 바람."
-    ◦ 위 내용을 담은 최종 리포트를 생성하여 대시보드에 표출.
-• **System:** 생성된 리포트 파일을 **S3 버킷(analysis-reports/2026/02)**에 자동 업로드 및 저장 완료.
-> 
-
----
-
-## 5. 구조 설계(System flow)
-
-```mermaid
-flowchart RL
- subgraph Frontend_Layer["Vue.js 프론트엔드 (사용자 영역)"]
-        ENG(("현업 엔지니어"))
-        DASH["Vue.js 대시보드"]
-  end
- subgraph Agent_Intelligence["AI 에이전트 팀 (LangGraph)"]
-        MAIN["Main Orchestrator"]
-        STATE[("Shared State<br>(Memory)")]
-        MONITOR["Data Monitor<br>(수집/감시)"]
-        ANALYZER["Stat Analyzer<br>(통계/설계)"]
-        RESEARCHER["Docs Researcher<br>(검증/검색)"]
-        ADVISOR["Strategy Advisor<br>(전략/아카이빙)"]
-  end
- subgraph FastAPI_Server["FastAPI 백엔드 서버 (Docker Container)"]
-    direction TB
-        API_EP["API Endpoints<br>(POST /run-workflow)"]
-        SCHED["🕒 Scheduler<br>(Time Alert Trigger)"]
-        Agent_Intelligence
-  end
- subgraph Data_Infra["데이터 인프라 (Storage Layer)"]
-    direction TB
-        SUPA[("🐘 Supabase (RDB)<br>- Sensor Data<br>- 4M Data")]
-        S3[("📦 AWS S3<br>(PDF/JSON 리포트 저장)")]
-        VEC[("🧠 Vector DB<br>(과거 사례 임베딩)")]
-        LEGACY[("🏭 Legacy MES/SPC<br>(Source System)")]
-  end
-    MAIN <--> STATE
-    MAIN --> MONITOR & ANALYZER & RESEARCHER & ADVISOR
-    MONITOR -. Data 조회 query .-> ANALYZER
-    ANALYZER -. Stat Result .-> RESEARCHER
-    RESEARCHER -. Validation .-> ADVISOR
-    ENG -- "1. 조치/피드백" --> DASH
-    DASH -- "2. API 요청" --> API_EP
-    API_EP -- Start --> MAIN
-    SCHED -- Auto Trigger (04:00) --> MAIN
-    MONITOR == Query (Raw Data) ==> SUPA
-    LEGACY -. ETL/Sync .-> SUPA
-    RESEARCHER <-- RAG Search (Validation) --> VEC
-    RESEARCHER <-- Load Docs --> S3
-    ADVISOR == Save Final Report ==> S3
-    S3 -. Embedding .-> VEC
-    MAIN -- Final JSON Response --> API_EP
-    API_EP --> DASH
-
-    style SCHED fill:#fff9c4,stroke:#fbc02d,stroke-width:2px
-    style FastAPI_Server fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
-    style Agent_Intelligence fill:#ffffff,stroke:#1e88e5,stroke-dasharray: 5 5
-    style Data_Infra fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
-
-
----
-
-## 6. 개발 계획(WBS)
-
-4월 29일 최종 배포까지 매월 1회씩 총 3번의 월간 스프린트(Sprint)로 나누어 진행예정
-
-| **기간** | **목표** | **Content** |
-| --- | --- | --- |
-| **1/20 ~ 2/20** | **PoC** | • 장비 파트 노후화 시나리오 완벽 구현
-• Docker/DB 및 기본 아키텍처 구축
-• Dummy Data 생성 및 검증 성공 |
-| **2/21 ~ 3/20** | **범용성 확장** | • 시나리오 추가
-• **RAG 확장** (과거 이력 기반의 조치방안 추천 등)
-• 통계 분석 도구 다양화 |
-| **3/21 ~ 4/20** | **고도화 및 배포** | • 에러 핸들링 및 예외 처리
-• 최종 배포 및 데모 시연 준비 |
-| **4/21 ~ 4/29** | **Sales pack 준비** |  |
+| **Metrology RDB** | FastAPI → DB 커넥터 | Monitor |
+| **사내 RDB (공정/장비/자재)** | FastAPI → DB 커넥터 / MCP: `text_to_sql` | Classify, Statistics Executor, QA Executor |
+| **사내 문서 RAG** | Vector DB (Chroma/Milvus 등) | Column Selector, Action Advisor, QA Executor(GENERAL) |
+| **MCP 통계 도구** | MCP Protocol | Statistics Executor |
+| **MCP text_to_sql** | MCP Protocol | Statistics Executor, QA Executor(DATA) |
+| **MCP plot_generator** | MCP Protocol | Reporter Interpreter, QA Executor(DATA) |
+| **알림 서비스** | Email/Slack API | Monitor, Report Generator |
+| **지식 DB** | FastAPI → DB 저장 | Report Generator |
+| **Vue 프론트엔드** | WebSocket / REST API | Report Generator, Response Node |

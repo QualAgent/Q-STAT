@@ -19,7 +19,7 @@
 - **Backend Only**: `docker compose up be`
 - **Frontend Only**: `docker compose up fe`
 - **Load Data**: `docker compose exec be python -m src.loader` (엑셀 -> DB 적재)
-- **Test**: `docker compose exec be pytest tests/`
+
 
 ### Directory Structure
 - `be/src/main.py`: FastAPI 앱 진입점

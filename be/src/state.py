@@ -1,7 +1,7 @@
 from typing import TypedDict, List, Optional, Any, Dict, Annotated
 import operator
 from langchain_core.messages import BaseMessage
-
+# 수정예정
 # =============================================================================
 # [1] 데이터 구조체 정의 (Sub-structures)
 # =============================================================================

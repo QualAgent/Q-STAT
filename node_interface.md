@@ -1,5 +1,3 @@
-좋아, interface 정의서를 작성해볼게.
-
 # 노드 간 인터페이스 정의서 (Interface Specification)
 
 ## 전체 워크플로우
@@ -7,21 +5,21 @@
 ```
 ┌──────────┐    ┌──────────┐    ┌─────────────┐    ┌──────────────┐
 │ Monitor  │───▶│ Classify │───▶│   Column    │───▶│     Tool     │
-│   (B)    │    │   (B)    │    │  Selector   │    │  Selection   │
-└──────────┘    └──────────┘    │     (C)     │    │     (C)      │
+│          │    │          │    │  Selector   │    │  Selection   │
+└──────────┘    └──────────┘    │             │    │     (C)      │
                                  └─────────────┘    └──────────────┘
                                          │                   │
                                          ▼                   ▼
 ┌──────────┐    ┌──────────┐    ┌─────────────┐    ┌──────────────┐
 │  Report  │◀───│  Action  │◀───│ Interpreter │◀───│   Executor   │
-│Generator │    │ Advisor  │    │     (A)     │    │     (A)      │
-│   (D)    │    │   (A)    │    └─────────────┘    └──────────────┘
+│Generator │    │ Advisor  │    │             │    │              │
+│          │    │          │    └─────────────┘    └──────────────┘
 └──────────┘    └──────────┘
 ```
 
 ---
 
-## 1. Monitor Node (담당: B)
+## 1. Monitor Node
 
 ### 개요
 PostgreSQL의 metrology 데이터를 능동적으로 감시하여 SPC 위반 또는 이상 현상을 감지
@@ -79,7 +77,7 @@ PostgreSQL의 metrology 데이터를 능동적으로 감시하여 SPC 위반 또
 
 ---
 
-## 2. Classify Node (담당: B)
+## 2. Classify Node
 
 ### 개요
 문제 유형 분류 및 상세 정보 수집
@@ -130,7 +128,7 @@ class ProblemInfo(TypedDict):
 
 ---
 
-## 3. Column Selector Node (담당: C)
+## 3. Column Selector Node
 
 ### 개요
 문제 원인 분석을 위한 후보 컬럼 선택
@@ -180,7 +178,7 @@ class ColumnSelectionResult(TypedDict):
 
 ---
 
-## 4. Tool Selection Node (담당: C)
+## 4. Tool Selection Node
 
 ### 개요
 각 컬럼에 적합한 통계 분석 도구 선택
@@ -230,7 +228,7 @@ class ToolSelectionResult(TypedDict):
 
 ---
 
-## 5. Executor Node (담당: A)
+## 5. Executor Node
 
 ### 개요
 선택된 도구를 실행하여 통계 분석 수행
@@ -284,7 +282,7 @@ class ExecutionResults(TypedDict):
 
 ---
 
-## 6. Interpreter Node (담당: A)
+## 6. Interpreter Node
 
 ### 개요
 통계 결과를 자연어로 해석하고 시각화 데이터 생성
@@ -335,7 +333,7 @@ class InterpretationResults(TypedDict):
 
 ---
 
-## 7. Action Advisor Node (담당: A)
+## 7. Action Advisor Node
 
 ### 개요
 분석 결과 기반 조치 권고 및 관련 문서 검색
@@ -400,7 +398,7 @@ class ActionRecommendation(TypedDict):
 
 ---
 
-## 8. Report Generator Node (담당: D)
+## 8. Report Generator Node
 
 ### 개요
 전체 분석 결과를 종합하여 최종 리포트 생성

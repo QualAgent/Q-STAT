@@ -1,76 +1,48 @@
-"""
-각 노드의 입출력 타입 정의
-"""
-from typing import TypedDict, Optional, List, Dict, Tuple
+from typing import TypedDict, Optional, List, Dict
 from datetime import datetime
-
-# ==================== Monitor Node ====================
-class SPCViolation(TypedDict):
-    """Monitor Node 출력"""
-    rule_type: str
-    rule_description: str
-    violated_points: List[Tuple[datetime, float]]
-    control_limits: Dict[str, float]
-    sigma_level: float
-    consecutive_violation: bool
-
 
 # ==================== Classify Node ====================
 class ProblemInfo(TypedDict):
-    """Classify Node 출력"""
+    """문제 정의 (Classify Node 출력)"""
     problem_code: str
-    problem_category: str
     description: str
     
     process_name: str
     equipment_id: str
     lot_number: str
     
-    detection_time: datetime
-    problem_start_time: datetime
-    problem_end_time: datetime
-    affected_duration: float
+    start_time: datetime
+    end_time: datetime
     
     affected_parameter: str
-    representative_values: Dict[str, float]
-    sample_size: int
-    
-    severity_level: str
+    statistics: Dict  # min, max, avg, std
+    severity: str
 
-
-# ==================== Column Selector Node ====================
+# ==================== Column Selector ====================
 class ColumnSelectionResult(TypedDict):
-    """Column Selector Node 출력"""
-    selected_columns: List[Dict]  # column_name, selection_reason, relevance_score
-    rejected_columns: List[Dict]
-    selection_strategy: str
+    """선택된 컬럼 (Column Selector 출력)"""
+    columns: List[Dict]  # column_name, reason, score
+    strategy: str
 
-
-# ==================== Tool Selection Node ====================
+# ==================== Tool Selection ====================
 class ToolSelectionResult(TypedDict):
-    """Tool Selection Node 출력"""
-    tool_assignments: List[Dict]  # column_name, tool_name, rationale
-    available_tools: List[str]
+    """선택된 도구 (Tool Selection 출력)"""
+    assignments: List[Dict]  # column_name, tool_name, etc
 
-
-# ==================== Executor Node ====================
+# ==================== Executor ====================
 class ExecutionResults(TypedDict):
-    """Executor Node 출력"""
-    results: List[Dict]  # execution_id, tool_name, statistical_output, status
-    execution_summary: Dict
+    """분석 실행 결과 (Executor 출력)"""
+    results: List[Dict]  # tool_name, output, status
+    summary: Dict  # total, success, failed
 
-
-# ==================== Interpreter Node ====================
+# ==================== Interpreter ====================
 class InterpretationResults(TypedDict):
-    """Interpreter Node 출력"""
-    interpretations: List[Dict]  # summary, explanation, chart_data
-    integrated_summary: str
+    """결과 해석 (Interpreter 출력)"""
+    interpretations: List[Dict]  # summary, explanation, chart
     key_insights: List[str]
 
-
-# ==================== Action Advisor Node ====================
+# ==================== Action Advisor ====================
 class ActionRecommendation(TypedDict):
-    """Action Advisor Node 출력"""
-    recommendations: List[Dict]  # action, priority, steps, documents
-    prioritized_action_plan: List[str]
-    related_cases: List[Dict]  # 과거 유사 사례
+    """조치 권고 (Action Advisor 출력)"""
+    actions: List[Dict]  # action, priority, steps, documents
+    action_plan: List[str]

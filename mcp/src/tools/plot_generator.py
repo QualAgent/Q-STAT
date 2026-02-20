@@ -55,11 +55,25 @@ async def generate_plot(
         fig = _create_figure(chart_type, df, x_column, y_column, group_column, title, options)
         plotly_json = json.loads(fig.to_json())
 
+        # 파일 저장 옵션 처리
+        save_path = options.get("save_path") if options else None
+        if save_path:
+            import os
+            # 디렉토리가 없으면 생성 (경로에 디렉토리가 포함된 경우)
+            directory = os.path.dirname(os.path.abspath(save_path))
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            
+            # HTML 파일로 저장 (인터랙티브 유지)
+            fig.write_html(save_path)
+            print(f"Plot saved to: {save_path}")
+
         elapsed = int((time.time() - start) * 1000)
         return {
             "chart_type": chart_type,
             "plotly_json": plotly_json,
             "execution_time_ms": elapsed,
+            "save_path": save_path
         }
     except Exception as e:
         return {"error": f"차트 생성 실패: {str(e)}"}

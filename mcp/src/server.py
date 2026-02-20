@@ -39,4 +39,7 @@ mcp.tool()(generate_plot)
 
 
 if __name__ == "__main__":
+    # Docker 환경에서 외부 접속 허용을 위해 0.0.0.0 바인딩
+    mcp.settings.host = "0.0.0.0"
+    mcp.settings.port = 8000
     mcp.run(transport="sse")

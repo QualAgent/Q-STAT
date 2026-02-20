@@ -28,6 +28,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "sqlalchemy>=2.0.30",
     "openpyxl",
+    "mcp>=1.0.0",
 ]
 
 [tool.uv]

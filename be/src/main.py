@@ -7,7 +7,9 @@ import urllib.request
 import json
 from dotenv import load_dotenv
 
-from src.routers.workflow import router as workflow_router
+from src.routers.notifications import router as notifications_router
+from src.routers.dashboard import router as dashboard_router
+from src.routers.reports import router as reports_router
 
 load_dotenv()
 
@@ -138,4 +140,6 @@ def test_llm(prompt: str = "안녕하세요, 간단히 자기소개 해주세요
 
 
 # --- 라우터 등록 ---
-app.include_router(workflow_router)
+app.include_router(notifications_router)
+app.include_router(dashboard_router)
+app.include_router(reports_router)

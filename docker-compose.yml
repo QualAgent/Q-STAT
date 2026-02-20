@@ -6,6 +6,7 @@ services:
       - ./be/src:/app/src
       - ./.env:/app/.env
       - ./data:/app/data
+      - ./knowledge:/app/knowledge
     ports:
       - "8000:8000"
     env_file:

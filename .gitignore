@@ -4,6 +4,13 @@ postgres_data/
 chroma_data/
 .DS_Store
 
+# Knowledge assets (PDF는 별도 공유 - 용량/보안 이슈)
+knowledge/docs/*.pdf
+
+# 개인 공부용 문서
+CONTEXT_FOR_LLM.md
+be/src/test_rag.py
+
 # Frontend
 node_modules/
 dist/
